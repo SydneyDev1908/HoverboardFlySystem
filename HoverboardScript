@@ -1,0 +1,226 @@
+local Players = game:GetService("Players")
+local RunService = game:GetService("RunService")
+local UserInputService = game:GetService("UserInputService")
+local Workspace = game:GetService("Workspace")
+local Debris = game:GetService("Debris")
+
+local player = Players.LocalPlayer
+local character = player.Character or player.CharacterAdded:Wait()
+local humanoid = character:WaitForChild("Humanoid")
+local rootPart = character:WaitForChild("HumanoidRootPart")
+
+local hoverboard = nil
+local isOnHoverboard = false
+local moveDirection = Vector3.new(0, 0, 0)
+local velocity = Vector3.new(0, 0, 0)
+local acceleration = 1.2
+local deceleration = 0.85
+local flyHeight = 30 -- Height above the ground where the hoverboard will fly
+local hoverPower = 5000 -- Increased force to ensure the hoverboard flies smoothly
+local hoverSpeed = 50
+local rotationSpeed = math.rad(100)
+local boostSpeed = 80
+local isBoosting = false
+local fuel = 100
+local isMoving = false
+
+local speedometerGui = nil
+
+-- Handles character respawn by resetting the references
+local function onCharacterRespawned(newCharacter)
+	character = newCharacter
+	humanoid = character:WaitForChild("Humanoid")
+	rootPart = character:WaitForChild("HumanoidRootPart")
+	isOnHoverboard = false
+	moveDirection = Vector3.new(0, 0, 0)
+	velocity = Vector3.new(0, 0, 0)
+	fuel = 100
+end
+
+local function createSpeedometer()
+	speedometerGui = Instance.new("BillboardGui")
+	speedometerGui.Size = UDim2.new(4, 0, 2, 0)
+	speedometerGui.StudsOffset = Vector3.new(0, 3, 0)
+	speedometerGui.Adornee = hoverboard
+	speedometerGui.Parent = hoverboard
+
+	local textLabel = Instance.new("TextLabel")
+	textLabel.Size = UDim2.new(1, 0, 1, 0)
+	textLabel.TextColor3 = Color3.fromRGB(85, 170, 255)
+	textLabel.BackgroundTransparency = 1
+	textLabel.TextScaled = true
+	textLabel.Font = Enum.Font.GothamBold
+	textLabel.TextStrokeTransparency = 0.1
+	textLabel.TextStrokeColor3 = Color3.fromRGB(0, 0, 0)
+	textLabel.Parent = speedometerGui
+
+	return textLabel
+end
+
+local function updateSpeedometer(textLabel, currentSpeed)
+	local displaySpeed = math.floor(currentSpeed)
+	local fuelStatus = isBoosting and "Boosting!" or ("Fuel: " .. math.floor(fuel) .. "%")
+	textLabel.Text = "Speed: " .. displaySpeed .. " | " .. fuelStatus
+end
+
+local function createHoverboard()
+	hoverboard = Instance.new("Part")
+	hoverboard.Size = Vector3.new(3, 0.5, 6)
+	hoverboard.Anchored = false
+	hoverboard.CanCollide = true
+	hoverboard.Position = rootPart.Position + Vector3.new(0, flyHeight, 0) -- Position above the ground
+	hoverboard.Name = "Hoverboard"
+	hoverboard.Parent = Workspace
+
+	-- Apply a constant force to keep the hoverboard flying
+	local bodyPosition = Instance.new("BodyPosition")
+	bodyPosition.MaxForce = Vector3.new(0, hoverPower, 0) -- Ensure it's powerful enough to maintain flying height
+	bodyPosition.D = 10
+	bodyPosition.P = 10000
+	bodyPosition.Position = hoverboard.Position + Vector3.new(0, flyHeight, 0) -- Constant height
+	bodyPosition.Parent = hoverboard
+
+	local bodyGyro = Instance.new("BodyGyro")
+	bodyGyro.MaxTorque = Vector3.new(0, 100000, 0)
+	bodyGyro.D = 500
+	bodyGyro.P = 10000
+	bodyGyro.Parent = hoverboard
+
+	local weld = Instance.new("Weld")
+	weld.Part0 = rootPart
+	weld.Part1 = hoverboard
+	weld.C0 = CFrame.new(0, -(humanoid.HipHeight + 1.5), 0)
+	weld.Parent = rootPart
+
+	local textLabel = createSpeedometer()
+
+	return hoverboard, textLabel
+end
+
+-- Control hoverboard movement and ensure it stays at the fly height
+local function controlHoverboard(textLabel)
+	if isOnHoverboard then
+		local camCF = Workspace.CurrentCamera.CFrame
+		local camLook = camCF.LookVector
+		local camRight = camCF.RightVector
+
+		local targetDirection = Vector3.new(0, 0, 0)
+
+		if moveDirection.Z ~= 0 then
+			targetDirection = targetDirection + camLook * -moveDirection.Z
+		end
+
+		if moveDirection.X ~= 0 then
+			targetDirection = targetDirection + camRight * moveDirection.X
+		end
+
+		velocity = velocity:Lerp(targetDirection * hoverSpeed, acceleration * RunService.Heartbeat:Wait())
+		velocity = velocity * deceleration
+
+		if hoverboard then
+			hoverboard.CFrame = CFrame.new(hoverboard.Position, hoverboard.Position + camLook) -- Maintain forward direction
+			hoverboard.CFrame = hoverboard.CFrame + velocity
+			isMoving = velocity.Magnitude > 0.1
+			updateSpeedometer(textLabel, velocity.Magnitude)
+
+			-- Ensure the hoverboard stays at the defined flying height
+			local bodyPosition = hoverboard:FindFirstChild("BodyPosition")
+			if bodyPosition then
+				bodyPosition.Position = rootPart.Position + Vector3.new(0, flyHeight, 0)
+			end
+		end
+	end
+end
+
+local function manageFuel()
+	if fuel > 0 and isOnHoverboard then
+		if not isMoving then
+			fuel = fuel - 0.01
+		elseif isBoosting then
+			fuel = fuel - 0.2
+		else
+			fuel = fuel - 0.05
+		end
+
+		if fuel <= 20 then
+			warn("Hoverboard fuel is low!")
+		end
+
+		if fuel <= 0 then
+			print("Fuel depleted. Hoverboard will be destroyed.")
+			if hoverboard then
+				hoverboard:Destroy()
+				isOnHoverboard = false
+				fuel = 100
+			end
+		end
+	end
+end
+
+local function startBoost()
+	if fuel > 10 then
+		isBoosting = true
+		print("Boosting!")
+	else
+		warn("Not enough fuel to boost!")
+	end
+end
+
+local function stopBoost()
+	isBoosting = false
+	print("Boost stopped.")
+end
+
+local function onInputBegan(input)
+	if input.KeyCode == Enum.KeyCode.E and not isOnHoverboard then
+		local textLabel
+		hoverboard, textLabel = createHoverboard()
+		isOnHoverboard = true
+	elseif input.KeyCode == Enum.KeyCode.W then
+		moveDirection = Vector3.new(0, 0, -1)
+	elseif input.KeyCode == Enum.KeyCode.S then
+		moveDirection = Vector3.new(0, 0, 1)
+	elseif input.KeyCode == Enum.KeyCode.A then
+		moveDirection = Vector3.new(-1, 0, 0)
+	elseif input.KeyCode == Enum.KeyCode.D then
+		moveDirection = Vector3.new(1, 0, 0)
+	elseif input.KeyCode == Enum.KeyCode.LeftShift then
+		startBoost()
+	elseif input.KeyCode == Enum.KeyCode.Q then
+		if hoverboard then
+			hoverboard.CFrame = hoverboard.CFrame * CFrame.Angles(0, -rotationSpeed, 0)
+		end
+	elseif input.KeyCode == Enum.KeyCode.E then
+		if hoverboard then
+			hoverboard.CFrame = hoverboard.CFrame * CFrame.Angles(0, rotationSpeed, 0)
+		end
+	end
+end
+
+local function onInputEnded(input)
+	if input.KeyCode == Enum.KeyCode.W or input.KeyCode == Enum.KeyCode.S then
+		moveDirection = Vector3.new(0, 0, 0)
+	elseif input.KeyCode == Enum.KeyCode.A or input.KeyCode == Enum.KeyCode.D then
+		moveDirection = Vector3.new(0, 0, 0)
+	elseif input.KeyCode == Enum.KeyCode.LeftShift then
+		stopBoost()
+	end
+end
+
+RunService.Heartbeat:Connect(function()
+	if isOnHoverboard and hoverboard then
+		controlHoverboard(speedometerGui.TextLabel)
+	end
+	manageFuel()
+end)
+
+UserInputService.InputBegan:Connect(onInputBegan)
+UserInputService.InputEnded:Connect(onInputEnded)
+
+player.CharacterAdded:Connect(onCharacterRespawned)
+
+player.CharacterRemoving:Connect(function()
+	if hoverboard then
+		hoverboard:Destroy()
+	end
+end)
